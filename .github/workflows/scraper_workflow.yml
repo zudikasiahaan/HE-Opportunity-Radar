@@ -1,4 +1,4 @@
-name: Scheduled Web Scraper
+name: RFP Radar
 
 on:
   schedule:
