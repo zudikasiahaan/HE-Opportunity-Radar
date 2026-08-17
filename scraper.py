@@ -18,59 +18,55 @@ if response.status_code == 200:
     scraped_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     bids_data = []
 
-    # Collect all <a> tags before decomposing layout elements
-    all_a_tags = soup.find_all("a")
-
-    # Decompose script, style, and navigation elements
-    for tag in soup(["script", "style", "nav", "header", "footer"]):
-        tag.decompose()
-
-    # Extract clean text lines
-    lines = [line.strip() for line in soup.get_text("\n").split("\n") if line.strip()]
-
     NAV_KEYWORDS = [
         "my account", "page menu", "font size", "coop connections", 
-        "terms of service", "home", "menu", "select language", "fairbanks office"
+        "terms of service", "home", "menu", "select language", "fairbanks office",
+        "contact us", "privacy policy", "about us", "careers", "search"
     ]
 
     INVALID_TITLES = ["status:", "status", "closed", "open", "close date:", "close date"]
 
     DATE_PATTERN = r"(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)?,?\s*(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s*\d{4}(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:[ap]\.?m\.?))?"
 
-    def get_safe_href(a_element):
-        """Safely extracts href attribute without raising AttributeError."""
-        if hasattr(a_element, "attrs") and a_element.attrs is not None:
-            return a_element.attrs.get("href")
-        return None
+    def slugify(text):
+        """Converts a title string into a standard URL slug."""
+        text = text.lower().strip()
+        text = re.sub(r"[^a-z0-9]+", "-", text)
+        return text.strip("-")
 
     def find_specific_url(title_str):
-        """Finds the direct hyperlink matching an RFP title on the GVEA page."""
-        clean_title_lower = title_str.lower().strip()
+        """Locates explicit /bids/ hyperlinks or constructs the GVEA bid permalink slug."""
+        if not title_str:
+            return URL
 
-        # 1. Match by exact or partial tag text
-        for a in all_a_tags:
-            href = get_safe_href(a)
-            if not href:
+        title_clean = title_str.strip().lower()
+        title_slug = slugify(title_str)
+
+        # 1. Search anchor tags for explicit /bids/ permalinks matching title or slug
+        for a in soup.find_all("a", href=True):
+            href = str(a.get("href", "")).strip()
+            if not href or href in ["#", "/"] or href.startswith(("javascript:", "mailto:", "tel:")):
                 continue
-            a_text = a.get_text(" ", strip=True).lower()
-            if a_text and (a_text in clean_title_lower or clean_title_lower in a_text):
+
+            href_lower = href.lower()
+            if "/bids/" in href_lower and title_slug in href_lower:
                 return urljoin(URL, href)
 
-        # 2. Match by title keywords in the URL slug
-        title_words = [w for w in re.findall(r"\w+", clean_title_lower) if len(w) > 3]
-        if title_words:
-            for a in all_a_tags:
-                href = get_safe_href(a)
-                if not href:
-                    continue
-                href_lower = href.lower()
-                matches = sum(1 for word in title_words if word in href_lower)
-                if matches >= min(2, len(title_words)):
-                    return urljoin(URL, href)
+            a_text = re.sub(r"\s+", " ", a.get_text(" ", strip=True)).strip().lower()
+            if a_text and (title_clean == a_text or title_clean in a_text) and "/bids/" in href_lower:
+                return urljoin(URL, href)
 
-        return URL
+        # 2. Direct slug permalink fallback
+        return f"https://www.gvea.com/bids/{title_slug}/"
 
-    # Parse text line by line
+    # Remove script and style elements
+    for tag in soup(["script", "style"]):
+        tag.decompose()
+
+    # Extract clean text lines for bid parsing
+    lines = [line.strip() for line in soup.get_text("\n").split("\n") if line.strip()]
+
+    # Parse text line by line using line-based detector
     i = 0
     while i < len(lines):
         line = lines[i]
