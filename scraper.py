@@ -109,8 +109,7 @@ if response.status_code == 200:
                     "title": title,
                     "status": status,
                     "close_date": close_date,
-                    # Format URL as clickable Excel hyperlink formula
-                    "url": f'=HYPERLINK("{specific_url}", "{specific_url}")'
+                    "url": specific_url
                 })
 
         i += 1
@@ -122,7 +121,7 @@ if response.status_code == 200:
         df = df.drop_duplicates(subset=["title"])
 
         df.to_csv("data.csv", index=False)
-        print(f"Successfully scraped {len(df)} clean GVEA bids into data.csv with clickable hyperlinks")
+        print(f"Successfully scraped {len(df)} clean GVEA bids into data.csv")
     else:
         print("No bids found.")
 
