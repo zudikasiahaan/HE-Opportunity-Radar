@@ -17,72 +17,72 @@ if response.status_code == 200:
     scraped_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     bids_data = []
 
-    # 1. Strip out header, footer, and navigation menus entirely
-    for nav in soup.find_all(["nav", "header", "footer", "aside"]):
-        nav.decompose()
+    # 1. Remove noise tags
+    for tag in soup(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
 
-    NAV_KEYWORDS = ["my account", "page menu", "font size", "coop connections", "terms of service", "start/stop service", "mygvea"]
+    # 2. Convert html to clean lines of text
+    lines = [line.strip() for line in soup.get_text("\n").split("\n") if line.strip()]
 
-    # 2. Target block elements
-    elements = soup.find_all(["li", "p", "div", "article"])
+    NAV_KEYWORDS = [
+        "my account", "page menu", "font size", "coop connections", 
+        "terms of service", "home", "menu", "select language", "fairbanks office"
+    ]
 
-    for el in elements:
-        # Skip parent containers that have nested elements containing 'Status:' to prevent duplicate full-page text
-        if el.find_all(lambda e: e != el and "Status:" in e.get_text()):
-            continue
+    # 3. Parse text line-by-line
+    i = 0
+    while i < len(lines):
+        line = lines[i]
 
-        text = el.get_text(" ", strip=True)
-        text_lower = text.lower()
+        # Look for status indicator or Close Date line
+        if "status:" in line.lower() or "close date:" in line.lower() or line.lower() == "closed" or line.lower() == "open":
+            # The title is usually the non-menu line directly preceding the status
+            title = ""
+            for k in range(i - 1, max(-1, i - 5), -1):
+                candidate = lines[k]
+                if len(candidate) > 5 and not any(nav in candidate.lower() for nav in NAV_KEYWORDS):
+                    title = candidate
+                    break
 
-        # Skip blocks that contain navigation text
-        if any(keyword in text_lower for keyword in NAV_KEYWORDS):
-            continue
-
-        if "Status:" in text or "Closed" in text or "Open" in text:
-            if "Status:" in text:
-                parts = re.split(r"Status\s*:", text, flags=re.I)
-                raw_title = parts[0].strip()
-                rest = parts[1].strip()
-                status_match = re.search(r"^([^\.\n\r\t]+)", rest)
-                status = status_match.group(1).strip() if status_match else "N/A"
-            else:
-                match = re.search(r"^(.*?)\s*(Closed|Open)\s*(.*)$", text, re.I)
-                if match:
-                    raw_title = match.group(1).strip()
-                    status = match.group(2).strip()
+            if title:
+                # Look around for status and close date in nearby lines
+                block_text = " ".join(lines[max(0, i-2):min(len(lines), i+4)])
+                
+                status_match = re.search(r"Status\s*:\s*([A-Za-z]+)", block_text, re.I)
+                if status_match:
+                    status = status_match.group(1).capitalize()
                 else:
-                    continue
+                    status = "Closed" if "closed" in block_text.lower() else "Open"
 
-            # Extract Close Date
-            date_match = re.search(r"Close\s*Date\s*:\s*([^\.\n\r]+)", text, re.I)
-            if not date_match:
-                date_match = re.search(r"(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)?,?\s*(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s*\d{4}", text, re.I)
-            close_date = date_match.group(0).strip() if date_match else "N/A"
+                date_match = re.search(r"Close\s*Date\s*:\s*([^\.]+)", block_text, re.I)
+                if date_match:
+                    close_date = date_match.group(1).strip()
+                else:
+                    full_date = re.search(r"(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)?,?\s*(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s*\d{4}[^\.]*", block_text, re.I)
+                    close_date = full_date.group(0).strip() if full_date else "N/A"
 
-            # Clean title
-            clean_title = re.sub(r"^[•\-\*]\s*", "", raw_title).strip()
-            clean_title = re.sub(r"^Bid Opportunities\s*", "", clean_title, flags=re.I).strip()
+                # Find link anchor matching title if present
+                link_tag = soup.find("a", string=re.compile(re.escape(title[:15]), re.I))
+                url = link_tag["href"] if link_tag and link_tag.has_attr("href") else URL
 
-            link_tag = el.find("a", href=True)
-            url = link_tag["href"] if link_tag else URL
-
-            # Filter titles by reasonable length and exclude navigation text
-            if clean_title and 5 < len(clean_title) < 150 and not any(k in clean_title.lower() for k in NAV_KEYWORDS):
                 bids_data.append({
                     "scraped_at": scraped_at,
-                    "title": clean_title,
-                    "status": status.split()[0],
+                    "title": title,
+                    "status": status,
                     "close_date": close_date,
                     "url": url
                 })
 
+        i += 1
+
     if bids_data:
         df = pd.DataFrame(bids_data)
+        # Clean duplicates
         df = df.drop_duplicates(subset=["title"])
         df.to_csv("data.csv", index=False)
-        print(f"Successfully scraped {len(df)} clean GVEA opportunities into data.csv")
+        print(f"Successfully scraped {len(df)} GVEA bids into data.csv")
     else:
-        print("No valid bids matched the criteria.")
+        print("No bids found.")
 
 else:
     print(f"Failed to fetch page. Status code: {response.status_code}")
