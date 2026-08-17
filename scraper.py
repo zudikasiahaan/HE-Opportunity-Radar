@@ -17,11 +17,11 @@ if response.status_code == 200:
     scraped_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     bids_data = []
 
-    # 1. Remove noise tags
+    # 1. Remove script, style, and navigation elements
     for tag in soup(["script", "style", "nav", "header", "footer"]):
         tag.decompose()
 
-    # 2. Convert html to clean lines of text
+    # 2. Extract clean text lines
     lines = [line.strip() for line in soup.get_text("\n").split("\n") if line.strip()]
 
     NAV_KEYWORDS = [
@@ -29,19 +29,27 @@ if response.status_code == 200:
         "terms of service", "home", "menu", "select language", "fairbanks office"
     ]
 
-    # 3. Parse text line-by-line
+    INVALID_TITLES = ["status:", "status", "closed", "open", "close date:", "close date"]
+
+    # 3. Parse line by line
     i = 0
     while i < len(lines):
         line = lines[i]
 
-        # Look for status indicator or Close Date line
-        if "status:" in line.lower() or "close date:" in line.lower() or line.lower() == "closed" or line.lower() == "open":
-            # The title is usually the non-menu line directly preceding the status
+        if "status:" in line.lower() or "close date:" in line.lower() or line.lower() in ["closed", "open"]:
             title = ""
             for k in range(i - 1, max(-1, i - 5), -1):
-                candidate = lines[k]
-                if len(candidate) > 5 and not any(nav in candidate.lower() for nav in NAV_KEYWORDS):
-                    title = candidate
+                candidate = lines[k].strip()
+                candidate_clean = re.sub(r"^[•\-\*\s]+", "", candidate)
+                
+                # Check candidate is a genuine title (not menu, not a label like "Status:" or "Closed")
+                if (
+                    len(candidate_clean) > 5 
+                    and candidate_clean.lower() not in INVALID_TITLES 
+                    and not candidate_clean.lower().startswith("status:")
+                    and not any(nav in candidate_clean.lower() for nav in NAV_KEYWORDS)
+                ):
+                    title = candidate_clean
                     break
 
             if title:
@@ -54,14 +62,17 @@ if response.status_code == 200:
                 else:
                     status = "Closed" if "closed" in block_text.lower() else "Open"
 
-                date_match = re.search(r"Close\s*Date\s*:\s*([^\.]+)", block_text, re.I)
+                date_match = re.search(r"Close\s*Date\s*:\s*([^\.\n\r]+)", block_text, re.I)
                 if date_match:
                     close_date = date_match.group(1).strip()
                 else:
-                    full_date = re.search(r"(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)?,?\s*(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s*\d{4}[^\.]*", block_text, re.I)
+                    full_date = re.search(
+                        r"(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)?,?\s*(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s*\d{4}[^\.]*", 
+                        block_text, 
+                        re.I
+                    )
                     close_date = full_date.group(0).strip() if full_date else "N/A"
 
-                # Find link anchor matching title if present
                 link_tag = soup.find("a", string=re.compile(re.escape(title[:15]), re.I))
                 url = link_tag["href"] if link_tag and link_tag.has_attr("href") else URL
 
@@ -77,10 +88,13 @@ if response.status_code == 200:
 
     if bids_data:
         df = pd.DataFrame(bids_data)
-        # Clean duplicates
+        # Drop duplicates and invalid titles
+        df = df[~df["title"].str.lower().isin(INVALID_TITLES)]
+        df = df[~df["title"].str.lower().str.startswith("status:")]
         df = df.drop_duplicates(subset=["title"])
+        
         df.to_csv("data.csv", index=False)
-        print(f"Successfully scraped {len(df)} GVEA bids into data.csv")
+        print(f"Successfully scraped {len(df)} clean GVEA bids into data.csv")
     else:
         print("No bids found.")
 
