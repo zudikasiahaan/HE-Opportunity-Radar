@@ -31,6 +31,9 @@ if response.status_code == 200:
 
     INVALID_TITLES = ["status:", "status", "closed", "open", "close date:", "close date"]
 
+    # Regex capturing date + time including 'p.m.' / 'a.m.'
+    DATE_PATTERN = r"(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)?,?\s*(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s*\d{4}(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:[ap]\.?m\.?))?"
+
     # 3. Parse line by line
     i = 0
     while i < len(lines):
@@ -42,7 +45,6 @@ if response.status_code == 200:
                 candidate = lines[k].strip()
                 candidate_clean = re.sub(r"^[•\-\*\s]+", "", candidate)
                 
-                # Check candidate is a genuine title (not menu, not a label like "Status:" or "Closed")
                 if (
                     len(candidate_clean) > 5 
                     and candidate_clean.lower() not in INVALID_TITLES 
@@ -53,7 +55,6 @@ if response.status_code == 200:
                     break
 
             if title:
-                # Look around for status and close date in nearby lines
                 block_text = " ".join(lines[max(0, i-2):min(len(lines), i+4)])
                 
                 status_match = re.search(r"Status\s*:\s*([A-Za-z]+)", block_text, re.I)
@@ -62,16 +63,13 @@ if response.status_code == 200:
                 else:
                     status = "Closed" if "closed" in block_text.lower() else "Open"
 
-                date_match = re.search(r"Close\s*Date\s*:\s*([^\.\n\r]+)", block_text, re.I)
-                if date_match:
-                    close_date = date_match.group(1).strip()
+                # Extract close date including full time suffix (e.g., "2 p.m.")
+                close_date_match = re.search(r"Close\s*Date\s*:\s*(" + DATE_PATTERN + ")", block_text, re.I)
+                if close_date_match:
+                    close_date = close_date_match.group(1).strip()
                 else:
-                    full_date = re.search(
-                        r"(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)?,?\s*(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s*\d{4}[^\.]*", 
-                        block_text, 
-                        re.I
-                    )
-                    close_date = full_date.group(0).strip() if full_date else "N/A"
+                    fallback_match = re.search(DATE_PATTERN, block_text, re.I)
+                    close_date = fallback_match.group(0).strip() if fallback_match else "N/A"
 
                 link_tag = soup.find("a", string=re.compile(re.escape(title[:15]), re.I))
                 url = link_tag["href"] if link_tag and link_tag.has_attr("href") else URL
@@ -88,7 +86,6 @@ if response.status_code == 200:
 
     if bids_data:
         df = pd.DataFrame(bids_data)
-        # Drop duplicates and invalid titles
         df = df[~df["title"].str.lower().isin(INVALID_TITLES)]
         df = df[~df["title"].str.lower().str.startswith("status:")]
         df = df.drop_duplicates(subset=["title"])
